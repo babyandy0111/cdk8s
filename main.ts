@@ -65,7 +65,31 @@ export class MyChart extends Chart {
       }
     })
     deployment1.addDependency(svc1)
-    // 3. 建立 IngressRoute for Traefik
+    // 3. 建立一個有 basic auth 的驗證 middleware
+    let secret1 = new ApiObject(this, "traefik-dashboard-auth-secret", {
+      apiVersion: "v1",
+      kind: "Secret",
+      metadata: {
+        name: "traefik-dashboard-basicauth-secret"
+      },
+      data: {
+        users: "YWRtaW46c2FtcGxlCg=="
+      }
+    })
+    let middleware1 = new ApiObject(this, "traefik-dashboard-middleware-secret", {
+      apiVersion: "traefik.containo.us/v1alpha1",
+      kind: "Middleware",
+      metadata: {
+        name: "traefik-dashboard-basicauth-middleware"
+      },
+      spec: {
+        basicAuth: {
+          secret: secret1.metadata.name
+        }
+      }
+    })
+    middleware1.addDependency(secret1)
+    // 4. 建立 IngressRoute for Traefik
     let ig1 = new ApiObject(this, "traefik-whoami-ingressroute", {
       apiVersion: "traefik.containo.us/v1alpha1",
       kind: "IngressRoute",
@@ -80,10 +104,15 @@ export class MyChart extends Chart {
           {
             match: "(PathPrefix(`/api`) || PathPrefix(`/dashboard`))",
             kind: "Rule",
+            // middlewares: [
+            //   {
+            //     name: middleware1.metadata.name
+            //   }
+            // ],
             services: [
               {
                 name: "api@internal",
-                kind: "TraefikService"
+                kind: "TraefikService",
               }
             ]
           },

@@ -88,5 +88,5 @@ mkdir my-cdk8s && cdk8s init typescript-app
 
 * Compile and deploy
 ```shell script
-npm run compile && kubectl apply -f dist/*
+npm run compile && npm run synth && kubectl apply -f dist/*
 ```
