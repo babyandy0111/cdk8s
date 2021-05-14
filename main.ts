@@ -1,6 +1,6 @@
 import { Construct } from 'constructs';
-import {ApiObject, App, Chart, ChartProps, Helm} from 'cdk8s';
-import {KubeDeployment} from "./imports/k8s";
+import {ApiObject, App, Chart, ChartProps} from 'cdk8s';
+import {KubeDeployment, KubeService} from "./imports/k8s";
 
 export class MyChart extends Chart {
   constructor(scope: Construct, id: string, props: ChartProps = { }) {
@@ -8,62 +8,32 @@ export class MyChart extends Chart {
 
     // define resources here
     // 請先確定已經安裝好 Helm 並透過 Helm 安裝好 Traefik
-    // -- 建立 Traefik 服務，使用 Helm
-    let controller = new Helm(this, "traefik", {
-      chart: "traefik/traefik",
-      values: {
-        ingressRoute: {
-          dashboard: {
-            enabled: true,
-            insecure: true
-          },
-        },
-        // ports: {
-        //   web: {
-        //     redirectTo: "websecure"
-        //   }
-        // },
-        service: {
-          annotations: {
-            "service.beta.kubernetes.io/aws-load-balancer-type": "alb",
-            "service.beta.kubernetes.io/aws-load-balancer-ssl-cert": "arn:aws:acm:ap-northeast-1:791762661746:certificate/ea392257-5692-47a3-b6a9-f8eb40c12ad5",
-            "service.beta.kubernetes.io/aws-load-balancer-ssl-ports": "443"
-          },
-          spec: {
-            externalTrafficPolicy: "Cluster"
-          }
-        }
-      }
-    })
-    // 建立驗證機制
-    let auth = new ApiObject(this, "traefik-auth", {
-      apiVersion: "v1",
-      kind: "Secret",
+    // 以下先建立一個範例路由
+    // 1. 首先建立一個 Service
+    let svc1 = new KubeService(this, "whoami-service", {
       metadata: {
-        name: "traefik-dashboard-basicauth-secret",
-        namespace: "traefik"
-      },
-      data: {
-        users: "YWRtaW46OTJCY1o1S2VuSEo3OHZWRQo="
-      }
-    })
-    auth.addDependency(controller)
-    // 建立 middleware 機制
-    let middleware = new ApiObject(this, "traefik-middleware", {
-      apiVersion: "traefik.containo.us/v1alpha1",
-      kind: "Middleware",
-      metadata: {
-        name: "traefik-dashboard-basicauth"
+        name: "whoami-service"
       },
       spec: {
-        basicAuth: {
-          secret: auth.metadata.name
-        }
+        selector: {
+          app: "whoami"  // 將此服務指向至標籤內為 app=whoami 的 deployment
+        },
+        ports: [
+          {
+            protocol: "TCP",  // 此服務會 expose 80 port
+            port: 80
+          }
+        ]
       }
     })
-    middleware.addDependency(auth)
-    // 建立一個 whoami container 測試 route 是否正確
-    new KubeDeployment(this, "whoami-deployment", {
+    // 2. 建立一個 Deployment
+    let deployment1 = new KubeDeployment(this, "whoami-deployment", {
+      metadata: {
+        name: "whoami-deployment",
+        labels: {
+          app: "whoami"
+        }
+      },
       spec: {
         replicas: 1,
         selector: {
@@ -80,10 +50,11 @@ export class MyChart extends Chart {
           spec: {
             containers: [
               {
-                name: "whoami-container",
+                name: "whoami",
                 image: "containous/whoami:latest",
                 ports: [
                   {
+                    name: "web",
                     containerPort: 80
                   }
                 ]
@@ -91,51 +62,45 @@ export class MyChart extends Chart {
             ]
           }
         }
-      },
-      metadata: {
-        name: "whoami-deployment"
       }
     })
-    // 建立 dashboard route
-    let dashboard = new ApiObject(this, "traefik-dashboard", {
+    deployment1.addDependency(svc1)
+    // 3. 建立 IngressRoute for Traefik
+    let ig1 = new ApiObject(this, "traefik-whoami-ingressroute", {
       apiVersion: "traefik.containo.us/v1alpha1",
       kind: "IngressRoute",
       metadata: {
-        name: "traefik-dashboard",
-        namespace: "traefik"
+        name: "traefik-ingressroute"
       },
       spec: {
-        entrypoints: ["websecure", "web"],
+        entryPoints: [
+            "web"
+        ],
         routes: [
           {
+            match: "(PathPrefix(`/api`) || PathPrefix(`/dashboard`))",
             kind: "Rule",
-            match: "Host(`micro.indochat.net`)",
-            middlewares: [
-              {
-                name: middleware.metadata.name,
-              }
-            ],
             services: [
               {
-                kind: "TraefikService",
-                name: "api@internal"
+                name: "api@internal",
+                kind: "TraefikService"
               }
             ]
           },
           {
+            match: "(PathPrefix(`/whoami`) && Host(`micro.mydomain.net`))",
             kind: "Rule",
-            match: "PathPrefix(`/whoami`)",
             services: [
               {
-                name: "whoami-deployment-668b6b68cc-",
-                port: "80"
+                name: "whoami-service",
+                port: 80,
               }
             ]
           }
         ]
       }
     })
-    dashboard.addDependency(middleware)
+    ig1.addDependency(svc1, deployment1)
 
     // -- 建立其他的服務？
   }
